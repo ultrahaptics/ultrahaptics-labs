@@ -10,6 +10,9 @@ Usage:
 ```
 $ python3 UHSDKLogViewer.py -e=/path/to/my/process
 ```
+
+Alternatively, run the compiled applications in the Executables directory (Mac and Windows only)
+
 Dependencies:
 -------------
 1. Python 3.7.x (http://python.org)
