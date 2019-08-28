@@ -14,6 +14,27 @@ import threading
 import argparse
 import platform
 from subprocess import Popen
+from SimpleWebSocketServer import SimpleWebSocketServer, WebSocket
+import json
+
+clients = []
+
+class SimpleWSServer(WebSocket):
+    def handleConnected(self):
+        clients.append(self)
+
+    def handleClose(self):
+        clients.remove(self)
+
+def run_server():
+    global server
+    server = SimpleWebSocketServer("", 9000, SimpleWSServer,
+                                   selectInterval=(1000.0 / 15) / 1000)
+    server.serveforever()
+
+t = threading.Thread(target=run_server)
+t.daemon = True
+t.start()
 
 try:
     from PyQt5.QtWidgets import *
@@ -199,7 +220,11 @@ class MainWindow(QMainWindow):
                 try:               
                     data = fifo.readline()
                     match = re.search(self.logHandler.xyzi_regex, data)
-                    self.viewer.setControlPointsFromFromRegexMatch(match)                      
+                    self.viewer.setControlPointsFromFromRegexMatch(match)    
+                    for client in clients:
+                        if match:
+                            msg = json.dumps({'x': match[1], 'y': match[2], 'z': match[3]})
+                            client.sendMessage(str(msg))            
                 except Exception as e:
                     print (e)
 
