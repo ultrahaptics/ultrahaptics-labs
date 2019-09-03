@@ -5,7 +5,7 @@
 # -The following Python modules are required: pyqt5, pyqtgraph, numpy, PyOpenGL, atom
 #   The recommended way to install these via pip (for Python 3)
 #   To install with pip3 run this command:
-#     $ pip3 install --user pyqt5 pyqtgraph numpy PyOpenGL atom
+#     $ pip3 install --user pyqt5 pyqtgraph numpy PyOpenGL atom SimpleWebSocketServer
 # On Windows, pywin32 is also required.
 import sys
 import os
@@ -14,59 +14,30 @@ import threading
 import argparse
 import platform
 from subprocess import Popen
-from SimpleWebSocketServer import SimpleWebSocketServer, WebSocket
 import json
+from websocket import createWebSocketServer, get_clients, socketIsOpen
+from pybuild import setupPyInstallerBuild
+from SDKLogHandler import SDKLogPipeHandler
+from bookmarks import BookmarksManager
+from ui import UHSDKLogViewer
 
-clients = []
-
-class SimpleWSServer(WebSocket):
-    def handleConnected(self):
-        clients.append(self)
-
-    def handleClose(self):
-        clients.remove(self)
-
-def run_server():
-    global server
-    server = SimpleWebSocketServer("", 9000, SimpleWSServer,
-                                   selectInterval=(1000.0 / 15) / 1000)
-    server.serveforever()
-
-t = threading.Thread(target=run_server)
-t.daemon = True
-t.start()
+# For Qt qrc file loading of resources
+import test_rc
 
 try:
     from PyQt5.QtWidgets import *
+    from PyQt5.QtGui import QIcon
     from PyQt5.QtCore import Qt
 except Exception as e:
     print("Exception on thirdparty import: " + str(e))
     print("*** WARNING: Unable to import dependencies. Please install via:\n\n pip3 install --user pyqt5 pyqtgraph numpy PyOpenGL atom \n")
 
-from SDKLogHandler import SDKLogPipeHandler
-from bookmarks import BookmarksManager
-from ui import UHSDKLogViewer
-
 IS_WINDOWS = platform.system().lower() == "windows"
 IS_UNIX = platform.system().lower() in ("darwin", "linux", "mac")
 
-# TODO: Move to build script
-def _append_run_path():
-    if getattr(sys, 'frozen', False):
-        pathlist = []
-
-        # If the application is run as a bundle, the pyInstaller bootloader
-        # extends the sys module by a flag frozen=True and sets the app
-        # path into variable _MEIPASS'.
-        pathlist.append(sys._MEIPASS)
-
-        # the application exe path
-        _main_app_path = os.path.dirname(sys.executable)
-        pathlist.append(_main_app_path)
-
-        # append to system path enviroment
-        os.environ["PATH"] += os.pathsep + os.pathsep.join(pathlist)
-_append_run_path()
+# If running PyInstaller, build step
+if getattr(sys, 'frozen', False):
+    setupPyInstallerBuild()
 
 class MainWindow(QMainWindow):
     def __init__(self, exe_path=None, auto_launch=True, parent = None):
@@ -78,7 +49,13 @@ class MainWindow(QMainWindow):
 
         self.log_reader_thread = None
         self.executable_process = None
-        self.processingSDKLog = True
+
+        # An Optional WebSocket, to serve control point data
+        self.server = None
+
+        self.serverActive = False
+
+        self.processingSDKLog = False
         self.my_env = None
 
         layout = QHBoxLayout()
@@ -118,6 +95,31 @@ class MainWindow(QMainWindow):
         self.exitAction.setShortcut("Esc")
         self.exitAction.triggered.connect(self.shutDown)
 
+        # Init QSystemTrayIcon
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(QIcon(":/icons/uh_tray.png"))
+
+        show_action = QAction("Show", self)
+        quit_action = QAction("Exit", self)
+        hide_action = QAction("Hide", self)
+        server_start = QAction("Start Server", self)
+        server_stop = QAction("Stop Server", self)
+
+        show_action.triggered.connect(self.show)
+        hide_action.triggered.connect(self.hide)
+        quit_action.triggered.connect(qApp.quit)
+        server_start.triggered.connect(self.startWebSocketServerThread)
+        server_stop.triggered.connect(self.stopWebSocketServerThread)
+
+        tray_menu = QMenu()
+        tray_menu.addAction(show_action)
+        tray_menu.addAction(hide_action)
+        tray_menu.addAction(quit_action)
+        tray_menu.addAction(server_start)
+        tray_menu.addAction(server_stop)
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.show()                
+
         # Set up an empty log file location
         self.setEnvironmentForLogging()
         self.startPollingLogReaderThread()
@@ -127,7 +129,7 @@ class MainWindow(QMainWindow):
             self.launchExecutable()
 
         # Setup the bookmarks list
-        self.updateBookmarkList()        
+        self.updateBookmarkList()
 
     def launchProcessFromFileDialog(self):
         dialog = QFileDialog()
@@ -213,6 +215,14 @@ class MainWindow(QMainWindow):
         # Store a copy of the environment, so it can be passed to the subprocess
         self.my_env = os.environ.copy()
 
+    # For serving control point data over websocket
+    def serveControlPoints(self, data):
+        if self.serverActive:
+            for client in get_clients():
+                if data:
+                    msg = json.dumps({'x': data[1], 'y': data[2], 'z': data[3]})
+                    client.sendMessage(str(msg))
+
     # Method for thread to process the Log on Unix - consider moving to SDKLogHandler Class
     def processLogUnix(self):
         with open(self.logHandler.pipe_name) as fifo:
@@ -220,11 +230,8 @@ class MainWindow(QMainWindow):
                 try:               
                     data = fifo.readline()
                     match = re.search(self.logHandler.xyzi_regex, data)
-                    self.viewer.setControlPointsFromFromRegexMatch(match)    
-                    for client in clients:
-                        if match:
-                            msg = json.dumps({'x': match[1], 'y': match[2], 'z': match[3]})
-                            client.sendMessage(str(msg))            
+                    self.viewer.setControlPointsFromFromRegexMatch(match)
+                    self.serveControlPoints(match)
                 except Exception as e:
                     print (e)
 
@@ -249,7 +256,8 @@ class MainWindow(QMainWindow):
 
             for line in lines:
                 match = re.search(self.logHandler.xyzi_regex, line)
-                self.viewer.setControlPointsFromFromRegexMatch(match)                
+                self.viewer.setControlPointsFromFromRegexMatch(match)
+                self.serveControlPoints(match)
 
     def startPollingLogReaderThread(self):
         if IS_UNIX:
@@ -268,6 +276,32 @@ class MainWindow(QMainWindow):
             # Fix this - it will quit the process!
             self.log_reader_thread.join()
             self.activeMonitoringAction.setText("Enable Monitoring")
+
+
+    def startWebSocketServerThread(self):
+        print("Starting Server")
+        try:
+            if not socketIsOpen():
+                self.server = createWebSocketServer()
+                self.serverThread = threading.Thread(target=self.server.serveforever)
+                self.serverThread.start()
+                self.serverActive = True
+            else:
+                print("SOCKET PORT ALREADY OPEN.")
+                self.serverActive = True
+        except Exception as e:
+            print(e)
+
+
+    def stopWebSocketServerThread(self):
+        print("Stopping Server")
+        if self.server:
+            try:
+                # TODO: Reliably close the Socket
+                self.serverThread.join(0.25)
+            except Exception as e:
+                print("Closing, exception:" + str(e))                
+            self.serverActive = False
 
     def toggleProcessingLog(self):
         self.processingSDKLog = not self.processingSDKLog
