@@ -24,7 +24,7 @@ class BookmarksManager(object):
     def addNewBookmark(self, path):
         original_bookmarks = self.getBookmarks()
         if len(original_bookmarks) > 10:
-            original_bookmarks[-1].pop()
+            original_bookmarks.pop()
 
         # First set the new path at index 0
         self.settings.setValue('bookmark/0', path)
