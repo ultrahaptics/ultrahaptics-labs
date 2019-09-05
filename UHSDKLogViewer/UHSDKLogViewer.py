@@ -74,24 +74,18 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.items)
 
         # MenuBar actions
-        bar = self.menuBar()
-        file = bar.addMenu("File")
-        playback = bar.addMenu("Playback")
-        self.openProcessAction = file.addAction("Open Process")
+        #bar = self.menuBar()
+        #file = bar.addMenu("File")
+        self.openProcessAction = QAction("Open Process", self)
         self.openProcessAction.triggered.connect(self.launchProcessFromFileDialog)
         self.openProcessAction.setShortcut("Ctrl+O")
+        QApplication.setAttribute(Qt.AA_DontUseNativeMenuBar)
 
-        self.clearBookmarksAction = file.addAction("Clear Bookmarks")
+        self.clearBookmarksAction = QAction("Clear Bookmarks", self)
         self.clearBookmarksAction.triggered.connect(self.clearBookmarksAndUpdate)
         self.clearBookmarksAction.setShortcut("Ctrl+X")
 
-        # TODO: Fix monitoring pause/resume
-        self.activeMonitoringAction = playback.addAction("Disable Monitoring")
-        self.activeMonitoringAction.setEnabled(False)
-        #self.activeMonitoringAction.setShortcut("Space")
-        #self.activeMonitoringAction.triggered.connect(self.toggleProcessingLog)
-
-        self.exitAction = file.addAction("Shutdown")
+        self.exitAction = QAction("Shutdown", self)
         self.exitAction.setShortcut("Esc")
         self.exitAction.triggered.connect(self.shutDown)
 
@@ -99,24 +93,21 @@ class MainWindow(QMainWindow):
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon(":/icons/uh_tray.png"))
 
-        show_action = QAction("Show", self)
         quit_action = QAction("Exit", self)
-        hide_action = QAction("Hide", self)
-        server_start = QAction("Start Server", self)
-        server_stop = QAction("Stop Server", self)
+        self.toggleVisualiser_action = QAction("Hide Visualiser", self)
+        self.server_enableDisable_action = QAction("Enable Web Socket", self)
 
-        show_action.triggered.connect(self.show)
-        hide_action.triggered.connect(self.hide)
-        quit_action.triggered.connect(qApp.quit)
-        server_start.triggered.connect(self.startWebSocketServerThread)
-        server_stop.triggered.connect(self.stopWebSocketServerThread)
+        self.toggleVisualiser_action.triggered.connect(self.toggleVisualiserShown)
+        self.server_enableDisable_action.triggered.connect(self.toggleWebSocketEnabled)
+
+        quit_action.triggered.connect(self.shutDown)
 
         tray_menu = QMenu()
-        tray_menu.addAction(show_action)
-        tray_menu.addAction(hide_action)
+        tray_menu.addAction(self.openProcessAction)
+        tray_menu.addAction(self.toggleVisualiser_action)
+        tray_menu.addAction(self.server_enableDisable_action)
+        tray_menu.addAction(self.clearBookmarksAction)
         tray_menu.addAction(quit_action)
-        tray_menu.addAction(server_start)
-        tray_menu.addAction(server_stop)
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.show()                
 
@@ -131,16 +122,31 @@ class MainWindow(QMainWindow):
         # Setup the bookmarks list
         self.updateBookmarkList()
 
+    def toggleVisualiserShown(self):
+        if self.isHidden():
+            self.show()
+            self.toggleVisualiser_action.setText("Hide Visualiser")
+        else:
+            self.hide()
+            self.toggleVisualiser_action.setText("Show Visualiser")
+
     def launchProcessFromFileDialog(self):
         dialog = QFileDialog()
         fname = dialog.getOpenFileName(None, 'Select Executable to Monitor', '.', '*',    '*', QFileDialog.DontUseNativeDialog)
         if os.path.isfile(fname[0]):
             if self.executable_process:
-                self.executable_process.kill()
+                self.killMonitoredProcess()
             self.exePath = fname[0]
             self.bookmarksManager.addNewBookmark(self.exePath)
             self.updateBookmarkList()
             self.launchExecutable(ask=True)
+
+    def killMonitoredProcess(self):
+        try:
+            self.executable_process.kill()
+        except Exception as e:
+            print(e)
+            print("Unable to kill the executable process: " + str(self.executable_process))
 
     def updateBookmarkList(self):
         self.bookmarkListWidget.clear()
@@ -148,7 +154,6 @@ class MainWindow(QMainWindow):
             self.bookmarkListWidget.addItem(bookmark)
 
     def clearBookmarksAndUpdate(self):
-        print("clearBookmarksAndUpdate")
         self.bookmarksManager.clearBookmarks()
         self.updateBookmarkList()
 
@@ -168,10 +173,8 @@ class MainWindow(QMainWindow):
             if retval == QMessageBox.No:
                 return
             else:
-                try:
-                    self.executable_process.kill()
-                except:
-                    print("Unable to kill the executable process: " + str(self.executable_process))
+                self.killMonitoredProcess()
+
         sys.exit(app.exec_())
 
     def closeEvent(self, event):
@@ -268,15 +271,18 @@ class MainWindow(QMainWindow):
         self.log_reader_thread.daemon = True
         self.processingSDKLog = True
         self.log_reader_thread.start()
-        self.activeMonitoringAction.setText("Disable Monitoring")
 
     def stopPollingLogReaderThread(self):
         self.processingSDKLog = False
         if self.log_reader_thread.is_alive():
             # Fix this - it will quit the process!
             self.log_reader_thread.join()
-            self.activeMonitoringAction.setText("Enable Monitoring")
 
+    def toggleWebSocketEnabled(self):
+        if not self.serverActive:
+            self.startWebSocketServerThread()
+        else:
+            self.stopWebSocketServerThread()
 
     def startWebSocketServerThread(self):
         print("Starting Server")
@@ -284,11 +290,13 @@ class MainWindow(QMainWindow):
             if not socketIsOpen():
                 self.server = createWebSocketServer()
                 self.serverThread = threading.Thread(target=self.server.serveforever)
+                self.serverThread.daemon = True
                 self.serverThread.start()
                 self.serverActive = True
             else:
                 print("SOCKET PORT ALREADY OPEN.")
                 self.serverActive = True
+            self.server_enableDisable_action.setText("Disable Web Socket")
         except Exception as e:
             print(e)
 
@@ -302,6 +310,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print("Closing, exception:" + str(e))                
             self.serverActive = False
+            self.server_enableDisable_action.setText("Enable Web Socket")
 
     def toggleProcessingLog(self):
         self.processingSDKLog = not self.processingSDKLog

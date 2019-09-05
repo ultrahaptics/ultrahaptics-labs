@@ -16,7 +16,7 @@ class BookmarksManager(object):
 
     # Clear ALL of the stored favourites
     def clearBookmarks(self):
-        keys =self.settings.allKeys()
+        keys = self.settings.allKeys()
         for key in keys:
             self.settings.remove(key)
         self.bookmarks = []
