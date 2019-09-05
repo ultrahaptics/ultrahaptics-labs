@@ -16,19 +16,26 @@ class BookmarksManager(object):
 
     # Clear ALL of the stored favourites
     def clearBookmarks(self):
-        self.settings.clear()
+        keys =self.settings.allKeys()
+        for key in keys:
+            self.settings.remove(key)
         self.bookmarks = []
+
+    def _removeDuplicates(self, x):
+        return list(dict.fromkeys(x))
 
     # Inserts a new Bookmark at index 0. 
     # Increase the index of other bookmarks and limit to 10
     def addNewBookmark(self, path):
         original_bookmarks = self.getBookmarks()
-        if len(original_bookmarks) > 10:
-            original_bookmarks.pop()
+        if len(original_bookmarks) > 9:
+            original_bookmarks[0:8]
 
-        # First set the new path at index 0
-        self.settings.setValue('bookmark/0', path)
+        self.clearBookmarks()
+
+        original_bookmarks.insert(0, path)
+        bookmarks = self._removeDuplicates(original_bookmarks)
 
         # Now move 0-1, 1->2 etc.
-        for n in range(0,len(original_bookmarks)):
-            self.settings.setValue('bookmark/%s' % (str(n+1)), original_bookmarks[n])
+        for n in range(0,len(bookmarks)):
+            self.settings.setValue('bookmark/%s' % (str(n)), original_bookmarks[n])
