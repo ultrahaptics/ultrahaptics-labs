@@ -91,7 +91,11 @@ class MainWindow(QMainWindow):
 
         # Init QSystemTrayIcon
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon(":/icons/uh_tray.png"))
+        if 'win' in sys.platform.lower():
+            iconPath = ":/icons/uh_tray_win.png"
+        else:
+            iconPath = ":/icons/uh_tray.png"
+        self.tray_icon.setIcon(QIcon(iconPath))
 
         quit_action = QAction("Exit", self)
         self.toggleVisualiser_action = QAction("Hide Visualiser", self)
